@@ -64,7 +64,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/elizarov-n906/gigachat-rewriter/main/assets/screenshot-2.jpg" alt="Список записей для рерайта" width="80%">
+  <img src="https://raw.githubusercontent.com/elizarov-n906/gigachat-rewriter/main/assets/screenshot-3.jpg" alt="Список записей для рерайта" width="80%">
   <br><em>Выбор записей и запуск массового рерайта</em>
 </p>
 
