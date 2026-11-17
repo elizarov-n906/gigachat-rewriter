@@ -3,7 +3,7 @@
  * Plugin Name: GigaChat Рерайт Постов
  * Plugin URI: https://github.com/elizarov-n906/gigachat-rewriter
  * Description: Массовый рерайт выбранных записей WordPress с использованием API GigaChat.
- * Version: 2.0.7
+ * Version: 2.0.9
  * Author: Elizarov_n906
  * Author URI: https://github.com/elizarov-n906
  * License: GPLv2 or later
@@ -36,7 +36,7 @@ function gcr_admin_styles() {
         .smartypress-ai-admin-content { flex: 1; width: 100%; overflow-y: auto; max-width: 1400px; margin: 0 auto; }
         .spai-alt-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
         .spai-alt-table-card { background: #fff; border: 1px solid #c3c4c7; border-radius: 4px; overflow: visible; margin-bottom: 24px; }
-        .spai-alt-toolbar { display: flex; justify-content: space-between; gap: 16px; padding: 16px; border-bottom: 1px solid #c3c4c7; align-items: center; }
+        .spai-alt-toolbar { display: flex; justify-content: space-between; gap: 16px; padding: 16px; border-bottom: 1px solid #c3c4c7; align-items: center; flex-wrap: wrap; }
         .spai-alt-toolbar h2 { margin: 0; font-size: 16px; font-weight: 600; }
         .spai-alt-table { border: 0; width: 100%; border-collapse: collapse; }
         .spai-alt-table th, .spai-alt-table td { padding: 12px 16px; vertical-align: middle; text-align: left; border-bottom: 1px solid #f0f0f1; }
@@ -196,7 +196,7 @@ function gcr_render_page() {
                 <div class="smartypress-ai-header-info">
                     <div>
                         <h1 class="smartypress-ai-header-title"><?php esc_html_e( 'GigaChat Рерайт Постов', 'gigachat-rewriter' ); ?></h1>
-                        <span class="smartypress-ai-header-version">Версия 2.0.7</span>
+                        <span class="smartypress-ai-header-version">Версия 2.0.9</span>
                     </div>
                 </div>
                 <div class="smartypress-ai-header-actions">
@@ -254,9 +254,10 @@ function gcr_render_page() {
                     <div class="spai-alt-table-card">
                         <div class="spai-alt-toolbar">
                             <h2><?php esc_html_e( 'Список записей для рерайта', 'gigachat-rewriter' ); ?></h2>
-                            <div style="display:flex;gap:8px;">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
                                 <button type="button" class="button" onclick="gcr_select_all()"><?php esc_html_e( 'Выбрать все', 'gigachat-rewriter' ); ?></button>
                                 <button type="button" class="button" onclick="gcr_deselect_all()"><?php esc_html_e( 'Снять выделение', 'gigachat-rewriter' ); ?></button>
+                                <button type="button" class="button" id="gcr-copy-ids-btn" onclick="gcr_copy_ids()"><?php esc_html_e( 'Скопировать ID', 'gigachat-rewriter' ); ?></button>
                                 <button type="button" class="button button-primary" id="gcr-start-btn" onclick="gcr_start_batch()"><?php esc_html_e( 'Рерайт выбранных', 'gigachat-rewriter' ); ?></button>
                             </div>
                         </div>
@@ -323,10 +324,22 @@ function gcr_render_page() {
 
     <script>
     // =============================================================================
+    // ВАЖНО: Получаем чекбоксы ВСЕГДА из актуального DOM, а не из кэша
+    // Это решает проблему с копированием лишних ID после сортировки
+    // =============================================================================
+    function gcr_getVisibleChecks() {
+        return Array.from(document.querySelectorAll('#gcr-posts-list .gcr-post-check'));
+    }
+
+    // =============================================================================
     // ЛОГИКА СОРТИРОВКИ ТАБЛИЦЫ
     // =============================================================================
+    let gcr_lastCheckedIndex = null;
+
     document.addEventListener('DOMContentLoaded', function() {
         const table = document.getElementById('gcr-sortable-table');
+        if (!table) return;
+        
         const headers = table.querySelectorAll('th[data-sort]');
         const tbody = table.querySelector('tbody');
 
@@ -335,10 +348,7 @@ function gcr_render_page() {
                 const sortKey = header.getAttribute('data-sort');
                 const isAsc = header.classList.contains('asc');
                 
-                // Сброс классов у всех заголовков
                 headers.forEach(h => h.classList.remove('asc', 'desc'));
-                
-                // Установка нового направления
                 header.classList.add(isAsc ? 'desc' : 'asc');
                 
                 const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -363,53 +373,96 @@ function gcr_render_page() {
                 });
 
                 rows.forEach(row => tbody.appendChild(row));
+                
+                // СБРАСЫВАЕМ индекс последнего клика после сортировки,
+                // потому что порядок строк изменился
+                gcr_lastCheckedIndex = null;
             });
         });
-    });
 
-    // =============================================================================
-    // ЛОГИКА ВЫДЕЛЕНИЯ ЧЕКБОКСОВ (SHIFT + CLICK)
-    // =============================================================================
-    let gcr_lastCheckedIndex = null;
-    const gcr_allChecks = document.querySelectorAll('.gcr-post-check');
-    const gcr_masterCheck = document.getElementById('gcr-master-check');
+        // =============================================================================
+        // ЛОГИКА ВЫДЕЛЕНИЯ ЧЕКБОКСОВ (SHIFT + CLICK)
+        // Используем актуальный порядок строк из DOM
+        // =============================================================================
+        const gcr_masterCheck = document.getElementById('gcr-master-check');
 
-    gcr_allChecks.forEach((checkbox, index) => {
-        checkbox.addEventListener('click', function(e) {
+        // Используем делегирование событий на tbody, чтобы работало после сортировки
+        tbody.addEventListener('click', function(e) {
+            const checkbox = e.target.closest('.gcr-post-check');
+            if (!checkbox) return;
+
+            const currentChecks = gcr_getVisibleChecks();
+            const currentIndex = currentChecks.indexOf(checkbox);
+
             if (e.shiftKey && gcr_lastCheckedIndex !== null) {
-                const start = Math.min(gcr_lastCheckedIndex, index);
-                const end = Math.max(gcr_lastCheckedIndex, index);
-                const state = this.checked;
+                const start = Math.min(gcr_lastCheckedIndex, currentIndex);
+                const end = Math.max(gcr_lastCheckedIndex, currentIndex);
+                const state = checkbox.checked;
                 
                 for (let i = start; i <= end; i++) {
-                    gcr_allChecks[i].checked = state;
+                    currentChecks[i].checked = state;
                 }
             }
-            gcr_lastCheckedIndex = index;
+            gcr_lastCheckedIndex = currentIndex;
             
-            const allChecked = Array.from(gcr_allChecks).every(cb => cb.checked);
-            if(gcr_masterCheck) gcr_masterCheck.checked = allChecked;
+            const allChecked = currentChecks.every(cb => cb.checked);
+            if (gcr_masterCheck) gcr_masterCheck.checked = allChecked;
         });
+
+        if (gcr_masterCheck) {
+            gcr_masterCheck.addEventListener('click', function() {
+                const state = this.checked;
+                gcr_getVisibleChecks().forEach(cb => cb.checked = state);
+                gcr_lastCheckedIndex = null;
+            });
+        }
     });
 
-    if(gcr_masterCheck) {
-        gcr_masterCheck.addEventListener('click', function() {
-            const state = this.checked;
-            gcr_allChecks.forEach(cb => cb.checked = state);
-            gcr_lastCheckedIndex = null;
-        });
-    }
-
     function gcr_select_all() {
-        document.querySelectorAll('.gcr-post-check').forEach(cb => cb.checked = true);
-        if(gcr_masterCheck) gcr_masterCheck.checked = true;
+        gcr_getVisibleChecks().forEach(cb => cb.checked = true);
+        const master = document.getElementById('gcr-master-check');
+        if (master) master.checked = true;
     }
     function gcr_deselect_all() {
-        document.querySelectorAll('.gcr-post-check').forEach(cb => cb.checked = false);
-        if(gcr_masterCheck) gcr_masterCheck.checked = false;
+        gcr_getVisibleChecks().forEach(cb => cb.checked = false);
+        const master = document.getElementById('gcr-master-check');
+        if (master) master.checked = false;
         gcr_lastCheckedIndex = null;
     }
 
+    // =============================================================================
+    // КОПИРОВАНИЕ ID ВЫДЕЛЕННЫХ СТАТЕЙ
+    // =============================================================================
+    function gcr_copy_ids() {
+        const checks = document.querySelectorAll('.gcr-post-check:checked');
+        if (checks.length === 0) {
+            alert('<?php echo esc_js(__('Сначала выделите статьи галочками!', 'gigachat-rewriter')); ?>');
+            return;
+        }
+
+        const ids = Array.from(checks).map(cb => cb.value);
+        const idsString = ids.join(', ');
+
+        navigator.clipboard.writeText(idsString).then(() => {
+            const btn = document.getElementById('gcr-copy-ids-btn');
+            const originalText = btn.innerText;
+            
+            btn.innerText = '<?php echo esc_js(__('Скопировано!', 'gigachat-rewriter')); ?> (' + ids.length + ')';
+            btn.classList.add('button-primary');
+            
+            setTimeout(() => {
+                btn.innerText = originalText;
+                btn.classList.remove('button-primary');
+            }, 2000);
+        }).catch(err => {
+            console.error('Не удалось скопировать: ', err);
+            alert('<?php echo esc_js(__('Ошибка копирования. Попробуйте вручную.', 'gigachat-rewriter')); ?>');
+        });
+    }
+
+    // =============================================================================
+    // ЛОГИКА ЗАПУСКА РЕРАЙТА
+    // =============================================================================
     async function gcr_start_batch() {
         const checks = document.querySelectorAll('.gcr-post-check:checked');
         if(checks.length === 0) { alert('<?php echo esc_js(__('Выберите хотя бы одну запись!', 'gigachat-rewriter')); ?>'); return; }
@@ -493,20 +546,15 @@ function gcr_clean_string( $str ) {
 }
 
 function gcr_clean_response( $text, $is_title = false ) {
-    // 1. Если модель сгенерировала целую HTML-страницу, вырезаем только содержимое <body>
     if ( preg_match( '/<body[^>]*>(.*?)<\/body>/is', $text, $matches ) ) {
         $text = $matches[1];
     } else {
-        // Если тега body нет, удаляем только мусорные теги документа, НЕ трогая <img>
         $text = preg_replace( '/<!DOCTYPE[^>]*>/i', '', $text );
         $text = preg_replace( '/<\/?(html|head|meta|title|body)[^>]*>/i', '', $text );
     }
 
-    // 2. Убираем блоки рассуждений
     $text = preg_replace( '/<reasoning>.*?<\/reasoning>/is', '', $text );
     $text = preg_replace( '/<think>.*?<\/think>/is', '', $text );
-
-    // 3. Убираем мусорные вступления
     $text = preg_replace( '/^(```html|```|Краткий пересказ|Резюме|Вот переписанный|Конечно, вот).*?\n/im', '', $text );
     $text = preg_replace( '/```\s*$/im', '', $text );
 
@@ -599,7 +647,6 @@ function gcr_rewrite_single_post( $post_id ) {
     $total_completion_tokens = 0;
     $total_tokens = 0;
 
-    // 1. Рерайт заголовка
     if ( ! empty( trim( $prompt_title ) ) ) {
         gcr_log( "=== РЕРАЙТ ЗАГОЛОВКА ===" );
         $response_title = wp_remote_post( 'https://gigachat.devices.sberbank.ru/api/v1/chat/completions', [
@@ -639,7 +686,6 @@ function gcr_rewrite_single_post( $post_id ) {
         }
     }
 
-    // 2. Рерайт контента
     if ( ! empty( trim( $prompt_content ) ) ) {
         gcr_log( "=== РЕРАЙТ КОНТЕНТА ===" );
         gcr_log( "Исходный контент длина", strlen( $post->post_content ) );
@@ -696,7 +742,6 @@ function gcr_rewrite_single_post( $post_id ) {
         }
     }
 
-    // 3. Обновляем пост и сохраняем метаданные
     if ( $title_updated || $content_updated ) {
         gcr_log( "=== ОБНОВЛЕНИЕ ПОСТА ===" );
         $result = wp_update_post( $update_data, true );
